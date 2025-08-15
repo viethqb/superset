@@ -81,9 +81,52 @@ RUN mkdir -p ${PYTHONPATH} superset/static requirements superset-frontend apache
   libpq-dev \
   libecpg-dev \
   libldap2-dev \
+  build-essential \
+  libsasl2-dev \
+  python-dev-is-python3 \
+  libldap2-dev \
+  libssl-dev \
+  wget \
+  zip \
+  unzip \
+  libaio1 \
+  fonts-liberation \
+  libasound2 \
+  libatk-bridge2.0-0 \
+  libatk1.0-0 \
+  libatspi2.0-0 \
+  libcairo2 \
+  libcups2 \
+  libdbus-1-3 \
+  libgbm1 \
+  libglib2.0-0 \
+  libgtk-3-0 \
+  libnspr4 \
+  libnss3 \
+  libpango-1.0-0 \
+  libx11-6 \
+  libxcb1 \
+  libxcomposite1 \
+  libxdamage1 \
+  libxext6 \
+  libxfixes3 \
+  libxkbcommon0 \
+  libxrandr2 \
+  xdg-utils \
+  libvulkan1 \
   && touch superset/static/version_info.json \
   && chown -R superset:superset ./* \
   && rm -rf /var/lib/apt/lists/*
+
+RUN wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && \
+  apt-get install -y --no-install-recommends ./google-chrome-stable_current_amd64.deb && \
+  wget https://storage.googleapis.com/chrome-for-testing-public/139.0.7258.66/linux64/chromedriver-linux64.zip && \
+  unzip chromedriver-linux64.zip && \
+  chmod +x chromedriver-linux64/chromedriver && \
+  mv chromedriver-linux64/chromedriver /usr/bin && \
+  apt-get autoremove -yqq --purge && \
+  apt-get clean && \
+  rm -f google-chrome-stable_current_amd64.deb chromedriver-linux64.zip
 
 COPY --chown=superset:superset pyproject.toml setup.py MANIFEST.in README.md ./
 # setup.py uses the version information in package.json

@@ -137,37 +137,41 @@ class EmailNotification(BaseNotification):  # pylint: disable=too-few-public-met
         img_tags = []
         for msgid in images.keys():
             img_tags.append(
-                f"""<div class="image">
-                    <img width="1000" src="cid:{msgid}">
-                </div>
-                """
+                f"""<div class="image-container">
+                        <img style="width:100%; max-width:100%; height:auto;" src="cid:{msgid}">
+                    </div>
+                    """
             )
         img_tag = "".join(img_tags)
         call_to_action = self._get_call_to_action()
         body = textwrap.dedent(
             f"""
             <html>
-              <head>
+            <head>
                 <style type="text/css">
-                  table, th, td {{
+                table, th, td {{
                     border-collapse: collapse;
                     border-color: rgb(200, 212, 227);
                     color: rgb(42, 63, 95);
                     padding: 4px 8px;
-                  }}
-                  .image{{
-                      margin-bottom: 18px;
-                      min-width: 1000px;
-                  }}
+                }}
+                .image-container{{
+                    margin-bottom: 18px;
+                    width: 100%;
+                }}
+                img {{
+                    max-width: 100%;
+                    height: auto;
+                }}
                 </style>
-              </head>
-              <body>
+            </head>
+            <body>
                 <div>{description}</div>
                 <br>
                 <b><a href="{self._content.url}">{call_to_action}</a></b><p></p>
                 {html_table}
                 {img_tag}
-              </body>
+            </body>
             </html>
             """
         )

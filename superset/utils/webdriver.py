@@ -39,6 +39,11 @@ from superset import feature_flag_manager
 from superset.extensions import machine_auth_provider_factory
 from superset.utils.retries import retry_call
 
+from PIL import Image
+import io
+import os
+import numpy as np
+
 WindowSize = tuple[int, int]
 logger = logging.getLogger(__name__)
 
@@ -349,8 +354,9 @@ class WebDriverSelenium(WebDriverProxy):
         return error_messages
 
     def get_screenshot(self, url: str, element_name: str, user: User) -> bytes | None:
+        window_height = int(os.environ.get("SCREENSHOT_WINDOW_HEIGHT", "30000"))
         driver = self.auth(user)
-        driver.set_window_size(*self._window)
+        driver.set_window_size(1920, window_height)
         driver.get(url)
         img: bytes | None = None
         selenium_headstart = current_app.config["SCREENSHOT_SELENIUM_HEADSTART"]
@@ -420,7 +426,52 @@ class WebDriverSelenium(WebDriverProxy):
                         unexpected_errors,
                     )
 
-            img = element.screenshot_as_png
+            img_bytes = element.screenshot_as_png
+
+            # Xử lý ảnh để loại bỏ khoảng trống phía dưới
+            try:
+                # Chuyển bytes thành Pillow Image
+                img_pil = Image.open(io.BytesIO(img_bytes))
+                img_array = np.array(img_pil)
+
+                # Kiểm tra ảnh có kênh alpha không
+                has_alpha = img_pil.mode == "RGBA"
+
+                # Xác định màu nền (lấy từ pixel cuối cùng)
+                bg_color = img_array[-1, -1, :3] if has_alpha else img_array[-1, -1]
+
+                # Tìm các hàng không trống
+                if has_alpha:
+                    non_empty_rows = np.where(
+                        np.any(img_array[:, :, :3] != bg_color, axis=(1, 2))
+                        | (img_array[:, :, 3] != 0)  # Alpha khác 0
+                    )[0]
+                else:
+                    if len(img_array.shape) == 3:  # Ảnh màu
+                        non_empty_rows = np.where(
+                            np.any(img_array != bg_color, axis=(1, 2))
+                        )[0]
+                    else:  # Ảnh grayscale
+                        non_empty_rows = np.where(
+                            np.any(img_array != bg_color, axis=1)
+                        )[0]
+
+                if len(non_empty_rows) > 0:
+                    last_non_empty_row = non_empty_rows[-1]
+                    cropped_array = img_array[: last_non_empty_row + 1]
+
+                    # Chuyển lại thành Pillow Image và sau đó thành bytes
+                    cropped_img = Image.fromarray(cropped_array)
+                    img_bytes_io = io.BytesIO()
+                    cropped_img.save(img_bytes_io, format="PNG")
+                    img_bytes = img_bytes_io.getvalue()
+
+                img = img_bytes
+
+            except Exception as e:
+                logger.warning("Failed to crop empty space from screenshot: %s", str(e))
+                img = img_bytes  # Trả về ảnh gốc nếu có lỗi khi xử lý
+
         except TimeoutException:
             # raise again for the finally block, but handled above
             pass

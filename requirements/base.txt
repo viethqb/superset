@@ -405,3 +405,9 @@ zipp==3.19.0
     # via importlib-metadata
 zstandard==0.22.0
     # via flask-compress
+trino==0.333.0 
+psycopg2-binary==2.9.10 
+python-ldap==3.4.4 
+authlib==1.5.2 
+xlrd==2.0.2 
+pillow==11.3.0
