@@ -411,3 +411,5 @@ python-ldap==3.4.4
 authlib==1.5.2 
 xlrd==2.0.2 
 pillow==11.3.0
+plotly==5.20.0
+pymysql>=1.1.0
