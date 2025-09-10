@@ -17,7 +17,7 @@
 import logging
 import textwrap
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.utils import make_msgid, parseaddr
 from typing import Any, Optional
 
@@ -81,7 +81,7 @@ class EmailNotification(BaseNotification):  # pylint: disable=too-few-public-met
     """
 
     type = ReportRecipientType.EMAIL
-    now = datetime.now(timezone("Asia/Ho_Chi_Minh"))
+    now = datetime.now(timezone("Asia/Ho_Chi_Minh")) - timedelta(days=1)
 
     @property
     def _name(self) -> str:
