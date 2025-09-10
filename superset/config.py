@@ -562,6 +562,8 @@ DEFAULT_FEATURE_FLAGS: dict[str, bool] = {
     # If on, you'll want to add "https://avatars.slack-edge.com" to the list of allowed
     # domains in your TALISMAN_CONFIG
     "SLACK_ENABLE_AVATARS": False,
+    # Allow users to optionally specify date formats in email subjects, which will be parsed if enabled. # noqa: E501
+    "DATE_FORMAT_IN_EMAIL_SUBJECT": False,
 }
 
 # ------------------------------
@@ -709,8 +711,8 @@ THUMBNAIL_EXECUTE_AS = [ExecutorType.CURRENT_USER, ExecutorType.SELENIUM]
 # `THUMBNAIL_EXECUTE_AS`; the executor is only equal to the currently logged in
 # user if the executor type is equal to `ExecutorType.CURRENT_USER`)
 # and return the final digest string:
-THUMBNAIL_DASHBOARD_DIGEST_FUNC: (
-    None | (Callable[[Dashboard, ExecutorType, str], str])
+THUMBNAIL_DASHBOARD_DIGEST_FUNC: None | (
+    Callable[[Dashboard, ExecutorType, str], str]
 ) = None
 THUMBNAIL_CHART_DIGEST_FUNC: Callable[[Slice, ExecutorType, str], str] | None = None
 
@@ -1127,8 +1129,8 @@ SQLLAB_CTAS_NO_LIMIT = False
 #         else:
 #             return f'tmp_{schema}'
 # Function accepts database object, user object, schema name and sql that will be run.
-SQLLAB_CTAS_SCHEMA_NAME_FUNC: (
-    None | (Callable[[Database, models.User, str, str], str])
+SQLLAB_CTAS_SCHEMA_NAME_FUNC: None | (
+    Callable[[Database, models.User, str, str], str]
 ) = None
 
 # If enabled, it can be used to store the results of long-running queries
@@ -1172,10 +1174,10 @@ UPLOADED_CSV_HIVE_NAMESPACE: str | None = None
 # db configuration and a result of this function.
 
 # mypy doesn't catch that if case ensures list content being always str
-ALLOWED_USER_CSV_SCHEMA_FUNC: Callable[[Database, models.User], list[str]] = (  # noqa: E731
-    lambda database, user: [UPLOADED_CSV_HIVE_NAMESPACE]
-    if UPLOADED_CSV_HIVE_NAMESPACE
-    else []
+ALLOWED_USER_CSV_SCHEMA_FUNC: Callable[[Database, models.User], list[str]] = (
+    lambda database, user: (  # noqa: E731
+        [UPLOADED_CSV_HIVE_NAMESPACE] if UPLOADED_CSV_HIVE_NAMESPACE else []
+    )
 )
 
 # Values that should be treated as nulls for the csv uploads.
