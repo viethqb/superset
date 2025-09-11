@@ -81,7 +81,6 @@ class EmailNotification(BaseNotification):  # pylint: disable=too-few-public-met
     """
 
     type = ReportRecipientType.EMAIL
-    now = datetime.now(timezone("Asia/Ho_Chi_Minh")) - timedelta(days=1)
 
     @property
     def _name(self) -> str:
@@ -127,7 +126,7 @@ class EmailNotification(BaseNotification):  # pylint: disable=too-few-public-met
         # Strip any malicious HTML from the description
         # pylint: disable=no-member
         description = nh3.clean(
-            self._content.description or "",
+            self._parse_name(self._content.description) or "",
             tags=ALLOWED_TAGS,
             attributes=ALLOWED_ATTRIBUTES,
         )
@@ -215,7 +214,16 @@ class EmailNotification(BaseNotification):  # pylint: disable=too-few-public-met
         This feature is hidden behind a feature flag `DATE_FORMAT_IN_EMAIL_SUBJECT`
         by default it is disabled
         """
-        return self.now.strftime(name)
+        now = datetime.now(timezone("Asia/Ho_Chi_Minh"))
+        weekday = now.weekday()
+        if weekday == 0:  # Thứ 2
+            yesterday = now - timedelta(days=3)  # Thứ 6 tuần trước
+        elif weekday == 6:  # Chủ nhật
+            yesterday = now - timedelta(days=2)  # Thứ 6
+        else:
+            yesterday = now - timedelta(days=1)
+
+        return yesterday.strftime(name)
 
     def _get_call_to_action(self) -> str:
         return __(app.config["EMAIL_REPORTS_CTA"])
