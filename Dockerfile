@@ -41,9 +41,10 @@ RUN --mount=type=bind,target=/frontend-mem-nag.sh,src=./docker/frontend-mem-nag.
   /frontend-mem-nag.sh
 
 WORKDIR /app/superset-frontend
-RUN --mount=type=bind,target=./package.json,src=./superset-frontend/package.json \
-  --mount=type=bind,target=./package-lock.json,src=./superset-frontend/package-lock.json \
-  npm ci
+COPY superset-frontend/package.json superset-frontend/package-lock.json ./
+RUN npm install
+# RUN npm install ajv@^8.12.0 ajv-keywords@^5.1.0 --no-save --legacy-peer-deps
+
 
 # Runs the webpack build process
 COPY superset-frontend /app/superset-frontend
@@ -114,19 +115,21 @@ RUN mkdir -p ${PYTHONPATH} superset/static requirements superset-frontend apache
   libxrandr2 \
   xdg-utils \
   libvulkan1 \
+  pkg-config \
+  build-essential \
   && touch superset/static/version_info.json \
   && chown -R superset:superset ./* \
   && rm -rf /var/lib/apt/lists/*
 
-RUN wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && \
-  apt-get install -y --no-install-recommends ./google-chrome-stable_current_amd64.deb && \
+RUN wget http://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_139.0.7258.66-1_amd64.deb && \
+  apt-get install -y --no-install-recommends ./google-chrome-stable_139.0.7258.66-1_amd64.deb && \
   wget https://storage.googleapis.com/chrome-for-testing-public/139.0.7258.66/linux64/chromedriver-linux64.zip && \
   unzip chromedriver-linux64.zip && \
   chmod +x chromedriver-linux64/chromedriver && \
   mv chromedriver-linux64/chromedriver /usr/bin && \
   apt-get autoremove -yqq --purge && \
   apt-get clean && \
-  rm -f google-chrome-stable_current_amd64.deb chromedriver-linux64.zip
+  rm -f google-chrome-stable_139.0.7258.66-1_amd64.deb chromedriver-linux64.zip
 
 COPY --chown=superset:superset pyproject.toml setup.py MANIFEST.in README.md ./
 # setup.py uses the version information in package.json

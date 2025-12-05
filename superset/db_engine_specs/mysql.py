@@ -19,7 +19,7 @@ import re
 from datetime import datetime
 from decimal import Decimal
 from re import Pattern
-from typing import Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional, Union
 from urllib import parse
 
 from flask_babel import gettext as __
@@ -43,6 +43,9 @@ from superset.db_engine_specs.base import BaseEngineSpec, BasicParametersMixin
 from superset.errors import SupersetErrorType
 from superset.models.sql_lab import Query
 from superset.utils.core import GenericDataType
+
+if TYPE_CHECKING:
+    from superset.models.core import Database
 
 # Regular expressions to catch custom errors
 CONNECTION_ACCESS_DENIED_REGEX = re.compile(
@@ -298,3 +301,59 @@ class MySQLEngineSpec(BasicParametersMixin, BaseEngineSpec):
             return False
 
         return True
+
+    @classmethod
+    def get_url_for_impersonation(
+        cls,
+        url: URL,
+        impersonate_user: bool,
+        username: Union[str, None] = None,
+        access_token: Union[str, None] = None,
+    ) -> URL:
+        """
+        Return a modified URL with the username set.
+
+        :param url: SQLAlchemy URL object
+        :param impersonate_user: Flag indicating if impersonation is enabled
+        :param username: Effective username
+        :param access_token: Personal access token
+        """
+        # Leave URL unchanged. We will impersonate with the pre-query below.
+        return url
+
+    @classmethod
+    def get_prequeries(
+        cls,
+        database: "Database",
+        catalog: Union[str, None] = None,
+        schema: Union[str, None] = None,
+    ) -> list[str]:
+        """
+        Return pre-session queries.
+
+        These are currently used as an alternative to ``adjust_engine_params`` for
+        databases where the selected schema cannot be specified in the SQLAlchemy URI or
+        connection arguments.
+
+        When impersonate_user is enabled and using MySQL client to connect to StarRocks,
+        this will execute EXECUTE AS statement to impersonate the logged-in user.
+
+        If username contains '@' (e.g., user@domain.com), only the part before '@'
+        will be used for impersonation.
+
+        :param database: Database instance
+        :param catalog: Catalog name (optional)
+        :param schema: Schema name (optional)
+        :return: List of queries to execute before the main query
+        """
+        if database.impersonate_user:
+            username = database.get_effective_user(database.url_object)
+
+            if username:
+                # If username contains '@', extract only the part before it
+                if "@" in username:
+                    username = username.split("@")[0]
+
+                return [f'EXECUTE AS "{username}" WITH NO REVERT;']
+
+        return []
