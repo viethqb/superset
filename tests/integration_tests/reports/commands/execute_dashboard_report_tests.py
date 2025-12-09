@@ -109,3 +109,89 @@ def test_report_with_header_data(
         assert header_data.get("notification_source") == ReportSourceFormat.DASHBOARD
         assert header_data.get("notification_type") == report_schedule.type
         assert len(send_email_smtp_mock.call_args.kwargs["header_data"]) == 7
+
+
+@patch("superset.reports.notifications.email.send_email_smtp")
+@patch(
+    "superset.commands.report.execute.DashboardScreenshot",
+)
+@patch(
+    "superset.commands.dashboard.permalink.create.CreateDashboardPermalinkCommand.run"
+)
+def test_report_for_dashboard_with_multiple_tabs(
+    create_dashboard_permalink_mock: MagicMock,
+    dashboard_screenshot_mock: MagicMock,
+    send_email_smtp_mock: MagicMock,
+    tabbed_dashboard: Dashboard,  # noqa: F811
+) -> None:
+    """Test that multiple tabs generate multiple screenshots"""
+    create_dashboard_permalink_mock.return_value = "permalink"
+    
+    # Mock screenshot instance and its get_screenshot method
+    screenshot_instance = MagicMock()
+    screenshot_instance.get_screenshot.return_value = b"test-image"
+    dashboard_screenshot_mock.return_value = screenshot_instance
+    
+    current_app.config["ALERT_REPORTS_NOTIFICATION_DRY_RUN"] = False
+
+    with create_dashboard_report(
+        dashboard=tabbed_dashboard,
+        extra={"dashboard": {"activeTabs": ["TAB-L1A", "TAB-L1B", "TAB-L2BB"]}},
+        name="test report multiple tabs",
+    ) as report_schedule:
+        AsyncExecuteReportScheduleCommand(
+            str(uuid4()), report_schedule.id, datetime.utcnow()
+        ).run()
+
+        # Should create DashboardScreenshot 3 times (one for each tab)
+        assert dashboard_screenshot_mock.call_count == 3
+        
+        # Verify each call has the correct tab anchor in URL
+        calls = dashboard_screenshot_mock.call_args_list
+        assert "anchor=TAB-L1A" in calls[0][0][0]
+        assert "anchor=TAB-L1B" in calls[1][0][0]
+        assert "anchor=TAB-L2BB" in calls[2][0][0]
+        
+        # Should send 1 email with 3 images
+        assert send_email_smtp_mock.call_count == 1
+        assert len(send_email_smtp_mock.call_args.kwargs["images"]) == 3
+
+
+@patch("superset.reports.notifications.email.send_email_smtp")
+@patch(
+    "superset.commands.report.execute.DashboardScreenshot",
+)
+@patch(
+    "superset.commands.dashboard.permalink.create.CreateDashboardPermalinkCommand.run"
+)
+def test_report_for_dashboard_with_no_tabs_backward_compatibility(
+    create_dashboard_permalink_mock: MagicMock,
+    dashboard_screenshot_mock: MagicMock,
+    send_email_smtp_mock: MagicMock,
+    tabbed_dashboard: Dashboard,  # noqa: F811
+) -> None:
+    """Test backward compatibility when no activeTabs specified"""
+    create_dashboard_permalink_mock.return_value = "permalink"
+    
+    screenshot_instance = MagicMock()
+    screenshot_instance.get_screenshot.return_value = b"test-image"
+    dashboard_screenshot_mock.return_value = screenshot_instance
+    
+    current_app.config["ALERT_REPORTS_NOTIFICATION_DRY_RUN"] = False
+
+    # No activeTabs specified - should work like before
+    with create_dashboard_report(
+        dashboard=tabbed_dashboard,
+        extra={"dashboard": {}},
+        name="test report no tabs",
+    ) as report_schedule:
+        AsyncExecuteReportScheduleCommand(
+            str(uuid4()), report_schedule.id, datetime.utcnow()
+        ).run()
+
+        # Should create DashboardScreenshot only once (backward compatibility)
+        assert dashboard_screenshot_mock.call_count == 1
+        
+        # Should send 1 email with 1 image
+        assert send_email_smtp_mock.call_count == 1
+        assert len(send_email_smtp_mock.call_args.kwargs["images"]) == 1

@@ -227,7 +227,7 @@ class BaseReportState:
 
     def _get_screenshots(self) -> list[bytes]:
         """
-        Get chart or dashboard screenshots
+        Get chart or dashboard screenshots (supports multiple tabs for dashboards)
         :raises: ReportScheduleScreenshotFailedError
         """
         url = self._get_url()
@@ -238,6 +238,7 @@ class BaseReportState:
         user = security_manager.find_user(username)
 
         if self._report_schedule.chart:
+            # Chart logic remains the same (single screenshot)
             window_width, window_height = app.config["WEBDRIVER_WINDOW"]["slice"]
             window_size = (
                 self._report_schedule.custom_width or window_width,
@@ -249,30 +250,117 @@ class BaseReportState:
                 window_size=window_size,
                 thumb_size=app.config["WEBDRIVER_WINDOW"]["slice"],
             )
+            try:
+                image = screenshot.get_screenshot(user=user)
+            except SoftTimeLimitExceeded as ex:
+                logger.warning("A timeout occurred while taking a screenshot.")
+                raise ReportScheduleScreenshotTimeout() from ex
+            except Exception as ex:
+                raise ReportScheduleScreenshotFailedError(
+                    f"Failed taking a screenshot {str(ex)}"
+                ) from ex
+            if not image:
+                raise ReportScheduleScreenshotFailedError()
+            return [image]
         else:
+            # Dashboard logic - support multiple tabs
             window_width, window_height = app.config["WEBDRIVER_WINDOW"]["dashboard"]
             window_size = (
                 self._report_schedule.custom_width or window_width,
                 self._report_schedule.custom_height or window_height,
             )
-            screenshot = DashboardScreenshot(
-                url,
-                self._report_schedule.dashboard.digest,
-                window_size=window_size,
-                thumb_size=app.config["WEBDRIVER_WINDOW"]["dashboard"],
+
+            # Get active tabs from extra config
+            extra = self._report_schedule.extra or {}
+            dashboard_state = extra.get("dashboard", {})
+            active_tabs = dashboard_state.get("activeTabs", [])
+
+            # If no tabs specified, take single screenshot (backward compatibility)
+            if not active_tabs:
+                screenshot = DashboardScreenshot(
+                    url,
+                    self._report_schedule.dashboard.digest,
+                    window_size=window_size,
+                    thumb_size=app.config["WEBDRIVER_WINDOW"]["dashboard"],
+                )
+                try:
+                    image = screenshot.get_screenshot(user=user)
+                except SoftTimeLimitExceeded as ex:
+                    logger.warning("A timeout occurred while taking a screenshot.")
+                    raise ReportScheduleScreenshotTimeout() from ex
+                except Exception as ex:
+                    raise ReportScheduleScreenshotFailedError(
+                        f"Failed taking a screenshot {str(ex)}"
+                    ) from ex
+                if not image:
+                    raise ReportScheduleScreenshotFailedError()
+                return [image]
+
+            # Take screenshot for each tab
+            # Need to create a separate permalink for each tab with its specific anchor
+            images = []
+
+            for tab_id in active_tabs:
+                try:
+                    # Create a minimal dashboard state with ONLY this specific tab
+                    # Don't copy other fields that might interfere with tab selection
+                    tab_dashboard_state = {
+                        "activeTabs": [tab_id],  # Only this tab
+                        "anchor": tab_id,  # Navigate to this tab
+                        # Preserve important fields if they exist
+                        "dataMask": dashboard_state.get("dataMask", {}),
+                        "urlParams": dashboard_state.get("urlParams", []),
+                    }
+
+                    logger.info(
+                        f"Creating screenshot for tab {tab_id} with minimal state: {tab_dashboard_state}"
+                    )
+
+                    # Create permalink with specific tab anchor
+                    permalink_key = CreateDashboardPermalinkCommand(
+                        dashboard_id=str(self._report_schedule.dashboard.uuid),
+                        state=tab_dashboard_state,
+                    ).run()
+                    tab_url = get_url_path(
+                        "Superset.dashboard_permalink", key=permalink_key
+                    )
+
+                    logger.info(f"Tab {tab_id} permalink URL: {tab_url}")
+
+                    screenshot = DashboardScreenshot(
+                        tab_url,
+                        self._report_schedule.dashboard.digest,
+                        window_size=window_size,
+                        thumb_size=app.config["WEBDRIVER_WINDOW"]["dashboard"],
+                    )
+
+                    image = screenshot.get_screenshot(user=user)
+                    if image:
+                        images.append(image)
+                        logger.info(
+                            f"Successfully captured screenshot for tab {tab_id}"
+                        )
+                    else:
+                        logger.warning(f"Failed to capture screenshot for tab {tab_id}")
+
+                except SoftTimeLimitExceeded as ex:
+                    logger.warning(f"Timeout while taking screenshot for tab {tab_id}")
+                    # Continue with other tabs instead of failing completely
+                    continue
+                except Exception as ex:
+                    logger.error(f"Error taking screenshot for tab {tab_id}: {str(ex)}")
+                    # Continue with other tabs
+                    continue
+
+            if not images:
+                raise ReportScheduleScreenshotFailedError(
+                    "Failed to capture any screenshots from the specified tabs"
+                )
+
+            logger.info(
+                f"Successfully captured {len(images)} screenshots from {len(active_tabs)} tabs"
             )
-        try:
-            image = screenshot.get_screenshot(user=user)
-        except SoftTimeLimitExceeded as ex:
-            logger.warning("A timeout occurred while taking a screenshot.")
-            raise ReportScheduleScreenshotTimeout() from ex
-        except Exception as ex:
-            raise ReportScheduleScreenshotFailedError(
-                f"Failed taking a screenshot {str(ex)}"
-            ) from ex
-        if not image:
-            raise ReportScheduleScreenshotFailedError()
-        return [image]
+            return images
 
     def _get_pdf(self) -> bytes:
         """
@@ -505,9 +593,9 @@ class BaseReportState:
                     SupersetError(
                         message=ex.message,
                         error_type=SupersetErrorType.REPORT_NOTIFICATION_ERROR,
-                        level=ErrorLevel.ERROR
-                        if ex.status >= 500
-                        else ErrorLevel.WARNING,
+                        level=(
+                            ErrorLevel.ERROR if ex.status >= 500 else ErrorLevel.WARNING
+                        ),
                     )
                 )
         if notification_errors:

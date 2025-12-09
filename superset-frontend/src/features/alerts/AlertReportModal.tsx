@@ -624,6 +624,24 @@ const AlertReportModal: FunctionComponent<AlertReportModalProps> = ({
     });
   };
 
+  const updateActiveTabsState = (value: string[]) => {
+    setCurrentAlert(currentAlertData => {
+      const dashboardState = currentAlertData?.extra?.dashboard;
+      const extra = {
+        dashboard: {
+          ...dashboardState,
+          activeTabs: value,
+          // Keep anchor for backward compatibility (set to first tab)
+          anchor: value.length > 0 ? value[0] : '',
+        },
+      };
+      return {
+        ...currentAlertData,
+        extra,
+      };
+    });
+  };
+
   // Alert fetch logic
   const {
     state: { loading, resource, error: fetchError },
@@ -1020,7 +1038,7 @@ const AlertReportModal: FunctionComponent<AlertReportModalProps> = ({
     updateAlertState('chart', null);
     if (tabsEnabled) {
       setTabOptions([]);
-      updateAnchorState('');
+      updateActiveTabsState([]);
     }
   };
 
@@ -1724,13 +1742,19 @@ const AlertReportModal: FunctionComponent<AlertReportModalProps> = ({
           {tabsEnabled && contentType === ContentType.Dashboard && (
             <StyledInputContainer>
               <>
-                <div className="control-label">{t('Select tab')}</div>
+                <div className="control-label">
+                  {t('Select tabs (multiple)')}
+                </div>
                 <StyledTreeSelect
+                  multiple
+                  treeCheckable
+                  showCheckedStrategy="SHOW_PARENT"
                   disabled={tabOptions?.length === 0}
                   treeData={tabOptions}
-                  value={currentAlert?.extra?.dashboard?.anchor}
-                  onSelect={updateAnchorState}
-                  placeholder={t('Select a tab')}
+                  value={currentAlert?.extra?.dashboard?.activeTabs || []}
+                  onChange={updateActiveTabsState}
+                  placeholder={t('Select tabs')}
+                  maxTagCount="responsive"
                 />
               </>
             </StyledInputContainer>
