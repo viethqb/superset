@@ -15,7 +15,9 @@
 # specific language governing permissions and limitations
 # under the License.
 import logging
+from datetime import datetime
 from typing import Any, Optional
+from uuid import uuid4
 
 from flask import request, Response
 from flask_appbuilder.api import expose, permission_name, protect, rison, safe
@@ -25,6 +27,7 @@ from flask_babel import ngettext
 from marshmallow import ValidationError
 
 from superset import is_feature_enabled
+from superset.extensions import db
 from superset.charts.filters import ChartFilter
 from superset.commands.report.create import CreateReportScheduleCommand
 from superset.commands.report.delete import DeleteReportScheduleCommand
@@ -51,6 +54,7 @@ from superset.reports.schemas import (
     ReportSchedulePostSchema,
     ReportSchedulePutSchema,
 )
+from superset.tasks.scheduler import execute
 from superset.utils.slack import get_channels_with_search
 from superset.views.base_api import (
     BaseSupersetModelRestApi,
@@ -76,9 +80,13 @@ class ReportScheduleRestApi(BaseSupersetModelRestApi):
         RouteMethod.RELATED,
         "bulk_delete",
         "slack_channels",  # not using RouteMethod since locally defined
+        "send_now",  # not using RouteMethod since locally defined
     }
     class_permission_name = "ReportSchedule"
-    method_permission_name = MODEL_API_RW_METHOD_PERMISSION_MAP
+    method_permission_name = {
+        **MODEL_API_RW_METHOD_PERMISSION_MAP,
+        "send_now": "write",
+    }
     resource_name = "report"
     allow_browser_login = True
 
@@ -249,6 +257,102 @@ class ReportScheduleRestApi(BaseSupersetModelRestApi):
     }
     openapi_spec_tag = "Report Schedules"
     openapi_spec_methods = openapi_spec_methods_override
+
+    @expose("/<int:pk>/send_now", methods=("POST",))
+    @protect()
+    @safe
+    @permission_name("post")
+    @statsd_metrics
+    @event_logger.log_this_with_context(
+        action=lambda self, *args, **kwargs: f"{self.__class__.__name__}.send_now",
+        log_to_statsd=False,
+    )
+    def send_now(self, pk: int) -> Response:
+        """Trigger immediate execution of a report schedule.
+        ---
+        post:
+          summary: Trigger immediate execution of a report schedule
+          parameters:
+          - in: path
+            schema:
+              type: integer
+            name: pk
+            description: The report schedule pk
+          responses:
+            200:
+              description: Report execution triggered
+              content:
+                application/json:
+                  schema:
+                    type: object
+                    properties:
+                      message:
+                        type: string
+                      task_id:
+                        type: string
+            400:
+              $ref: '#/components/responses/400'
+            401:
+              $ref: '#/components/responses/401'
+            403:
+              $ref: '#/components/responses/403'
+            404:
+              $ref: '#/components/responses/404'
+            422:
+              $ref: '#/components/responses/422'
+            500:
+              $ref: '#/components/responses/500'
+        """
+        try:
+            # Validate report schedule exists
+            report_schedule = (
+                db.session.query(ReportSchedule).filter_by(id=pk).one_or_none()
+            )
+            if not report_schedule:
+                return self.response_404()
+
+            # Check if report is active
+            if not report_schedule.active:
+                return self.response_422(
+                    message="Cannot send inactive report schedule"
+                )
+
+            # Generate task ID and trigger immediate execution
+            task_id = str(uuid4())
+            scheduled_dttm = datetime.utcnow()
+
+            # Trigger the execute task immediately with current time as eta
+            execute.apply_async(
+                (pk,),
+                task_id=task_id,
+                eta=scheduled_dttm,
+            )
+
+            logger.info(
+                "Triggered immediate execution for report schedule %s, task id: %s",
+                pk,
+                task_id,
+            )
+
+            event_logger.log_with_context(
+                action="ReportScheduleRestApi.send_now",
+                report_schedule_id=pk,
+                task_id=task_id,
+            )
+
+            return self.response(
+                200,
+                message="Report execution triggered successfully",
+                task_id=task_id,
+            )
+        except Exception as ex:
+            logger.error(
+                "Error triggering report schedule %s: %s",
+                pk,
+                str(ex),
+                exc_info=True,
+            )
+            return self.response_422(message=str(ex))
 
     @expose("/<int:pk>", methods=("DELETE",))
     @protect()

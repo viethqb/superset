@@ -156,6 +156,7 @@ function AlertList({
   );
   const [currentAlertDeleting, setCurrentAlertDeleting] =
     useState<AlertObject | null>(null);
+  const [sendingReportId, setSendingReportId] = useState<number | null>(null);
 
   // Actions
   function handleAlertEdit(alert: AlertObject | null) {
@@ -237,6 +238,34 @@ function AlertList({
       }
     },
     [alerts, setResourceCollection, updateResource],
+  );
+
+  const handleSendNow = useCallback(
+    async (alert: AlertObject) => {
+      if (!alert?.id) return;
+
+      setSendingReportId(alert.id);
+      try {
+        const response = await SupersetClient.post({
+          endpoint: `/api/v1/report/${alert.id}/send_now`,
+        });
+
+        if (response.json) {
+          addSuccessToast(t('%s "%s" has been triggered', title, alert.name));
+        }
+      } catch (error) {
+        createErrorHandler(errMsg =>
+          addDangerToast(
+            t('Error triggering %s "%s": %s', title, alert.name, errMsg),
+          ),
+        )(error);
+      } finally {
+        setSendingReportId(null);
+        // Refresh data to show updated status
+        setTimeout(() => refreshData(), 2000);
+      }
+    },
+    [addSuccessToast, addDangerToast, refreshData, title],
   );
 
   const columns = useMemo(
@@ -357,10 +386,13 @@ function AlertList({
           const handleDelete = () => setCurrentAlertDeleting(original);
           const handleGotoExecutionLog = () =>
             history.push(`/${original.type.toLowerCase()}/${original.id}/log`);
+          const handleSendNowClick = () => handleSendNow(original);
 
           const allowEdit =
             original.owners.map((o: Owner) => o.id).includes(user.userId) ||
             isUserAdmin(user);
+
+          const isSending = sendingReportId === original.id;
 
           const actions = [
             canEdit
@@ -370,6 +402,16 @@ function AlertList({
                   placement: 'bottom',
                   icon: 'Note',
                   onClick: handleGotoExecutionLog,
+                }
+              : null,
+            canEdit && original.active
+              ? {
+                  label: 'send-now-action',
+                  tooltip: t('Send now'),
+                  placement: 'bottom',
+                  icon: 'Share',
+                  onClick: handleSendNowClick,
+                  disabled: isSending,
                 }
               : null,
             canEdit
@@ -405,7 +447,14 @@ function AlertList({
         hidden: true,
       },
     ],
-    [canDelete, canEdit, isReportEnabled, toggleActive],
+    [
+      canDelete,
+      canEdit,
+      isReportEnabled,
+      toggleActive,
+      handleSendNow,
+      sendingReportId,
+    ],
   );
 
   const subMenuButtons: SubMenuProps['buttons'] = [];
