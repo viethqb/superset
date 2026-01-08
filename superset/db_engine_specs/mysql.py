@@ -15,6 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 import contextlib
+import logging
 import re
 from datetime import datetime
 from decimal import Decimal
@@ -36,6 +37,7 @@ from sqlalchemy.dialects.mysql import (
     TINYINT,
     TINYTEXT,
 )
+from sqlalchemy.engine.reflection import Inspector
 from sqlalchemy.engine.url import URL
 
 from superset.constants import TimeGrain
@@ -64,6 +66,8 @@ SYNTAX_ERROR_REGEX = re.compile(
     "version for the right syntax to use near '(?P<server_error>.*)"
 )
 
+logger = logging.getLogger(__name__)
+
 
 class MySQLEngineSpec(BasicParametersMixin, BaseEngineSpec):
     engine = "mysql"
@@ -77,6 +81,8 @@ class MySQLEngineSpec(BasicParametersMixin, BaseEngineSpec):
     encryption_parameters = {"ssl": "1"}
 
     supports_dynamic_schema = True
+    supports_catalog = True
+    supports_dynamic_catalog = True
 
     column_type_mappings = (
         (
@@ -215,6 +221,23 @@ class MySQLEngineSpec(BasicParametersMixin, BaseEngineSpec):
         catalog: Optional[str] = None,
         schema: Optional[str] = None,
     ) -> tuple[URL, dict[str, Any]]:
+        """
+        For StarRocks via MySQL connector, support catalog.schema format in URI.
+        Format: mysql://user:pass@host:port/catalog.schema
+
+        When a different catalog is selected (different from URI), clear database part
+        and use prequeries to set catalog instead, to avoid connection errors.
+
+        When catalog=None (e.g., when listing catalogs), clear database part
+        to avoid connection errors.
+        """
+        # logger.info(
+        #     "[MySQL adjust_engine_params] Input: catalog=%s, schema=%s, uri.database=%s",
+        #     catalog,
+        #     schema,
+        #     uri.database,
+        # )
+
         uri, new_connect_args = super().adjust_engine_params(
             uri,
             connect_args,
@@ -222,8 +245,96 @@ class MySQLEngineSpec(BasicParametersMixin, BaseEngineSpec):
             schema,
         )
 
-        if schema:
-            uri = uri.set(database=parse.quote(schema, safe=""))
+        database = uri.database
+
+        # When listing catalogs (catalog=None), don't use database from URI
+        # to avoid connection errors with catalog.schema format
+        if catalog is None and schema is None:
+            # Clear database part when listing catalogs
+            if database and "." in database:
+                # If URI has catalog.schema format, clear it for catalog listing
+                uri = uri.set(database=None)
+                # logger.info(
+                #     "[MySQL adjust_engine_params] Cleared database for catalog listing"
+                # )
+            return uri, new_connect_args
+
+        # Extract catalog from URI if it has catalog.schema format
+        uri_catalog = None
+        if database and "." in database:
+            uri_catalog = parse.unquote(database.split(".")[0])
+
+        # logger.info(
+        #     "[MySQL adjust_engine_params] uri_catalog=%s, selected catalog=%s",
+        #     uri_catalog,
+        #     catalog,
+        # )
+
+        # If catalog is provided and different from URI catalog, clear database part
+        # We'll use prequeries to set catalog instead
+        if catalog and uri_catalog and catalog != uri_catalog:
+            # Different catalog selected: clear database to avoid connection error
+            # Catalog will be set via prequeries
+            uri = uri.set(database=None)
+            # logger.info(
+            #     "[MySQL adjust_engine_params] Different catalog selected, cleared database. "
+            #     "Catalog will be set via prequeries: %s",
+            #     catalog,
+            # )
+            # If schema is also provided, we can't set it in URI, it will be set via prequeries
+            return uri, new_connect_args
+
+        # Normal case: set database in URI
+        if schema and database:
+            schema = parse.quote(schema, safe="")
+            if catalog:
+                # StarRocks format: catalog.schema
+                catalog = parse.quote(catalog, safe="")
+                uri = uri.set(database=f"{catalog}.{schema}")
+                # logger.info(
+                #     "[MySQL adjust_engine_params] Set database to catalog.schema: %s.%s",
+                #     catalog,
+                #     schema,
+                # )
+            elif "." in database:
+                # If database already has catalog.schema format, update schema part
+                catalog_part = database.split(".")[0]
+                uri = uri.set(database=f"{catalog_part}.{schema}")
+                # logger.info(
+                #     "[MySQL adjust_engine_params] Updated schema part: %s.%s",
+                #     catalog_part,
+                #     schema,
+                # )
+            else:
+                # Plain MySQL: just schema
+                uri = uri.set(database=schema)
+                # logger.info(
+                #     "[MySQL adjust_engine_params] Set database to schema: %s", schema
+                # )
+        elif schema:
+            # Only schema provided, no catalog
+            schema = parse.quote(schema, safe="")
+            uri = uri.set(database=schema)
+            # logger.info(
+            #     "[MySQL adjust_engine_params] Only schema provided, set database: %s",
+            #     schema,
+            # )
+        elif catalog and database and "." in database:
+            # Only catalog provided, update catalog part
+            catalog = parse.quote(catalog, safe="")
+            schema_part = database.split(".")[1] if "." in database else None
+            if schema_part:
+                uri = uri.set(database=f"{catalog}.{schema_part}")
+                # logger.info(
+                #     "[MySQL adjust_engine_params] Updated catalog part: %s.%s",
+                #     catalog,
+                #     schema_part,
+                # )
+
+        # logger.info(
+        #     "[MySQL adjust_engine_params] Output: uri.database=%s",
+        #     uri.database,
+        # )
 
         return uri, new_connect_args
 
@@ -236,9 +347,25 @@ class MySQLEngineSpec(BasicParametersMixin, BaseEngineSpec):
         """
         Return the configured schema.
 
-        A MySQL database is a SQLAlchemy schema.
+        For StarRocks via MySQL connector, URI format is:
+            mysql://user:pass@host:port/catalog.schema
+
+        For plain MySQL:
+            mysql://user:pass@host:port/schema
         """
-        return parse.unquote(sqlalchemy_uri.database)
+        database = (
+            sqlalchemy_uri.database.strip("/") if sqlalchemy_uri.database else None
+        )
+
+        if not database:
+            return None
+
+        # Check if database contains catalog.schema format
+        if "." in database:
+            return parse.unquote(database.split(".")[1])
+
+        # Plain MySQL: database is the schema
+        return parse.unquote(database)
 
     @classmethod
     def get_datatype(cls, type_code: Any) -> Optional[str]:
@@ -346,14 +473,206 @@ class MySQLEngineSpec(BasicParametersMixin, BaseEngineSpec):
         :param schema: Schema name (optional)
         :return: List of queries to execute before the main query
         """
+        prequeries: list[str] = []
+
+        # logger.info(
+        #     "[MySQL get_prequeries] Input: catalog=%s, schema=%s",
+        #     catalog,
+        #     schema,
+        # )
+
+        # Impersonation (existing behavior)
         if database.impersonate_user:
             username = database.get_effective_user(database.url_object)
-
             if username:
-                # If username contains '@', extract only the part before it
                 if "@" in username:
                     username = username.split("@")[0]
+                impersonation_query = f'EXECUTE AS "{username}" WITH NO REVERT;'
+                prequeries.append(impersonation_query)
+                # logger.info(
+                #     "[MySQL get_prequeries] Added impersonation query: %s",
+                #     impersonation_query,
+                # )
 
-                return [f'EXECUTE AS "{username}" WITH NO REVERT;']
+        # Set catalog if provided (needed for StarRocks over MySQL protocol)
+        uri_catalog = None
+        uri_schema = None
+        if database.url_object and database.url_object.database:
+            db_part = database.url_object.database.strip("/")
+            if "." in db_part:
+                parts = db_part.split(".")
+                uri_catalog = parse.unquote(parts[0])
+                if len(parts) > 1:
+                    uri_schema = parse.unquote(parts[1])
 
-        return []
+        catalog_changed = False
+        if catalog:
+            # logger.info(
+            #     "[MySQL get_prequeries] uri_catalog=%s, selected catalog=%s",
+            #     uri_catalog,
+            #     catalog,
+            # )
+
+            # Check if catalog changed
+            if uri_catalog and catalog != uri_catalog:
+                catalog_changed = True
+                # logger.info(
+                #     "[MySQL get_prequeries] Catalog changed from %s to %s",
+                #     uri_catalog,
+                #     catalog,
+                # )
+
+            # Always set catalog when provided, even if it matches URI catalog
+            # StarRocks may need explicit catalog setting before USE schema
+            # StarRocks MySQL protocol syntax: USE 'CATALOG catalog_name'
+            # Note: CATALOG must be uppercase and the entire string is in single quotes
+            # Clean catalog name from frontend selection
+            catalog_clean = catalog.strip()  # Remove leading/trailing whitespace
+            catalog_escaped = catalog_clean.replace("'", "''")  # Escape single quotes
+
+            # Format: USE 'CATALOG catalog_name' (CATALOG uppercase, entire string in quotes)
+            # This works for both simple names and names with underscores like 'default_catalog'
+            catalog_query = f"USE 'CATALOG {catalog_escaped}'"
+            prequeries.append(catalog_query)
+            # logger.info("[MySQL get_prequeries] Added catalog query: %s", catalog_query)
+
+        # Set schema/database if provided
+        # Only set schema if:
+        # 1. Schema is explicitly provided AND
+        # 2. Catalog hasn't changed (to avoid using schema from old catalog)
+        # OR schema is different from URI schema (explicitly selected)
+        if schema:
+            schema_changed = uri_schema and schema != uri_schema
+
+            # Only set schema if catalog hasn't changed, or if schema is explicitly different
+            # This prevents using schema from old catalog when switching catalogs
+            if not catalog_changed or schema_changed:
+                # StarRocks MySQL protocol syntax: USE database_name (no quotes after SET catalog)
+                # After SET catalog, USE database doesn't need quotes
+                schema_clean = schema.strip()  # Remove leading/trailing whitespace
+                # Use backticks for identifiers to handle special characters
+                # Format: USE `database_name` or USE database_name
+                schema_query = f"USE `{schema_clean}`"
+                prequeries.append(schema_query)
+                # logger.info(
+                #     "[MySQL get_prequeries] Added schema query: %s", schema_query
+                # )
+            # else:
+            #     logger.info(
+            #         "[MySQL get_prequeries] Skipping schema %s because catalog changed",
+            #         schema,
+            # )
+
+        # logger.info(
+        #     "[MySQL get_prequeries] Output: prequeries=%s",
+        #     prequeries,
+        # )
+
+        return prequeries
+
+    @classmethod
+    def get_catalog_names(
+        cls,
+        database: "Database",
+        inspector: Inspector,
+    ) -> set[str]:
+        """
+        For StarRocks over MySQL protocol, try SHOW CATALOGS.
+        For plain MySQL this will likely fail; return empty set then.
+
+        Note: This should be called without catalog context, so SHOW CATALOGS
+        can list all available catalogs.
+        """
+        try:
+            # Use raw connection to avoid database context issues
+            with inspector.bind.connect() as conn:
+                result = conn.execute("SHOW CATALOGS")
+                return {row[0] for row in result}
+        except Exception as ex:
+            # Log the error for debugging but don't fail
+            logger = logging.getLogger(__name__)
+            logger.debug(
+                "Failed to get catalogs (might be plain MySQL): %s", ex, exc_info=True
+            )
+            return set()
+
+    @classmethod
+    def get_default_catalog(
+        cls,
+        database: "Database",
+    ) -> Optional[str]:
+        """
+        Default catalog from URI format catalog.schema, URI query (?catalog=), or extra.default_catalog.
+
+        URI format: mysql://user:pass@host:port/catalog.schema
+        """
+        # First, try to get from URI database part (catalog.schema format)
+        if database.url_object and database.url_object.database:
+            db_part = database.url_object.database.strip("/")
+            if "." in db_part:
+                catalog = db_part.split(".")[0]
+                return parse.unquote(catalog)
+
+        # Second, try URI query parameter
+        if database.url_object and database.url_object.query:
+            catalog = database.url_object.query.get("catalog")
+            if catalog:
+                return catalog
+
+        # Third, try from extra parameters
+        try:
+            import json
+
+            extra = json.loads(database.extra or "{}")
+            default_catalog = extra.get("default_catalog")
+            if default_catalog:
+                return default_catalog
+        except Exception:
+            pass
+
+        return None
+
+    @classmethod
+    def get_schema_names(cls, inspector: Inspector) -> set[str]:
+        """
+        SHOW DATABASES when catalog is set (StarRocks); fallback for MySQL.
+
+        Note: This method is called from Database.get_all_schema_names() which passes
+        the catalog parameter. However, inspector.bind.execute may use a connection
+        from pool that doesn't have prequeries executed.
+
+        For StarRocks, we need to use Database.get_raw_connection() which executes
+        prequeries. But since we only have inspector, we'll use raw connection from engine
+        and hope the catalog was set via adjust_engine_params or prequeries.
+        """
+        try:
+            # Use raw connection - for StarRocks, catalog should be set via prequeries
+            # when get_inspector(catalog=...) was called
+            engine = inspector.bind
+            logger.info(
+                "[MySQL get_schema_names] Using raw connection from engine. "
+                "URI database: %s",
+                engine.url.database,
+            )
+            with engine.raw_connection() as raw_conn:
+                cursor = raw_conn.cursor()
+                # Execute SHOW DATABASES which respects the catalog set via prequeries
+                query = "SHOW DATABASES"
+                logger.info("[MySQL get_schema_names] Executing query: %s", query)
+                cursor.execute(query)
+                result = cursor.fetchall()
+                schemas = {row[0] for row in result}
+                logger.info(
+                    "[MySQL get_schema_names] Found %d schemas: %s",
+                    len(schemas),
+                    list(schemas)[:10],  # Log first 10 schemas
+                )
+                return schemas
+        except Exception as ex:
+            logger.warning(
+                "[MySQL get_schema_names] Error using raw connection, falling back: %s",
+                ex,
+                exc_info=True,
+            )
+            # Fallback to standard method for plain MySQL
+            return set(inspector.get_schema_names())

@@ -759,6 +759,68 @@ class Database(
         :param force: whether to force refresh the cache
         :return: The table/schema pairs
         """
+        logger = logging.getLogger(__name__)
+        # logger.info(
+        #     "[Database get_all_table_names_in_schema] engine=%s, catalog=%s, schema=%s",
+        #     self.db_engine_spec.engine,
+        #     catalog,
+        #     schema,
+        # )
+        
+        # For MySQL engine spec with StarRocks, use raw connection to ensure
+        # prequeries (SET catalog, USE schema) are executed before listing tables
+        if self.db_engine_spec.engine == "mysql" and catalog:
+            try:
+                # logger.info(
+                #     "[Database get_all_table_names_in_schema] Using raw connection for MySQL with catalog"
+                # )
+                # Use get_sqla_engine with override_ssh_tunnel instead, then get raw connection
+                with self.get_sqla_engine(
+                    catalog=catalog,
+                    schema=schema,
+                ) as engine:
+                    with closing(engine.raw_connection()) as conn:
+                        # Execute prequeries to set catalog and schema
+                        prequeries = self.db_engine_spec.get_prequeries(
+                            database=self,
+                            catalog=catalog,
+                            schema=schema,
+                        )
+                        for prequery in prequeries:
+                            cursor = conn.cursor()
+                            # logger.info(
+                            #     "[Database get_all_table_names_in_schema] Executing prequery: %s",
+                            #     prequery,
+                            # )
+                            cursor.execute(prequery)
+                        
+                        # Execute SHOW TABLES which respects the catalog and schema set via prequeries
+                        cursor = conn.cursor()
+                        query = "SHOW TABLES"
+                        # logger.info(
+                        #     "[Database get_all_table_names_in_schema] Executing query: %s", query
+                        # )
+                        cursor.execute(query)
+                        result = cursor.fetchall()
+                        tables = {row[0] for row in result}
+                        # logger.info(
+                        #     "[Database get_all_table_names_in_schema] Found %d tables: %s",
+                        #     len(tables),
+                        #     list(tables)[:10],  # Log first 10 tables
+                        # )
+                        return {
+                            DatasourceName(table, schema, catalog)
+                            for table in tables
+                        }
+            except Exception as ex:
+                # logger.error(
+                #     "[Database get_all_table_names_in_schema] Error: %s",
+                #     ex,
+                #     exc_info=True,
+                # )
+                raise self.db_engine_spec.get_dbapi_mapped_exception(ex) from ex
+        
+        # Default behavior for other engines
         try:
             with self.get_inspector(catalog=catalog, schema=schema) as inspector:
                 return {
@@ -781,6 +843,68 @@ class Database(
         catalog: str | None,
         schema: str,
     ) -> set[DatasourceName]:
+        logger = logging.getLogger(__name__)
+        # logger.info(
+        #     "[Database get_all_view_names_in_schema] engine=%s, catalog=%s, schema=%s",
+        #     self.db_engine_spec.engine,
+        #     catalog,
+        #     schema,
+        # )
+        
+        # For MySQL engine spec with StarRocks, use raw connection to ensure
+        # prequeries (SET catalog, USE schema) are executed before listing views
+        if self.db_engine_spec.engine == "mysql" and catalog:
+            try:
+                # logger.info(
+                #     "[Database get_all_view_names_in_schema] Using raw connection for MySQL with catalog"
+                # )
+                # Use get_sqla_engine with override_ssh_tunnel instead, then get raw connection
+                with self.get_sqla_engine(
+                    catalog=catalog,
+                    schema=schema,
+                ) as engine:
+                    with closing(engine.raw_connection()) as conn:
+                        # Execute prequeries to set catalog and schema
+                        prequeries = self.db_engine_spec.get_prequeries(
+                            database=self,
+                            catalog=catalog,
+                            schema=schema,
+                        )
+                        for prequery in prequeries:
+                            cursor = conn.cursor()
+                            # logger.info(
+                            #     "[Database get_all_view_names_in_schema] Executing prequery: %s",
+                            #     prequery,
+                            # )
+                            cursor.execute(prequery)
+                        
+                        # Execute SHOW FULL TABLES WHERE Table_type = 'VIEW'
+                        cursor = conn.cursor()
+                        query = "SHOW FULL TABLES WHERE Table_type = 'VIEW'"
+                        # logger.info(
+                        #     "[Database get_all_view_names_in_schema] Executing query: %s", query
+                        # )
+                        cursor.execute(query)
+                        result = cursor.fetchall()
+                        views = {row[0] for row in result}
+                        # logger.info(
+                        #     "[Database get_all_view_names_in_schema] Found %d views: %s",
+                        #     len(views),
+                        #     list(views)[:10],  # Log first 10 views
+                        # )
+                        return {
+                            DatasourceName(view, schema, catalog)
+                            for view in views
+                        }
+            except Exception as ex:
+                # logger.error(
+                #     "[Database get_all_view_names_in_schema] Error: %s",
+                #     ex,
+                #     exc_info=True,
+                # )
+                raise self.db_engine_spec.get_dbapi_mapped_exception(ex) from ex
+        
+        # Default behavior for other engines
         """Parameters need to be passed as keyword arguments.
 
         For unused parameters, they are referenced in
@@ -793,6 +917,7 @@ class Database(
         :param force: whether to force refresh the cache
         :return: set of views
         """
+        # Default behavior for other engines
         try:
             with self.get_inspector(catalog=catalog, schema=schema) as inspector:
                 return {
@@ -813,12 +938,38 @@ class Database(
         schema: str | None = None,
         ssh_tunnel: SSHTunnel | None = None,
     ) -> Inspector:
-        with self.get_sqla_engine(
-            catalog=catalog,
-            schema=schema,
-            override_ssh_tunnel=ssh_tunnel,
-        ) as engine:
-            yield sqla.inspect(engine)
+        # For MySQL engine spec with StarRocks, ensure prequeries are executed
+        # before creating inspector to set catalog/schema context
+        if self.db_engine_spec.engine == "mysql" and catalog:
+            with self.get_sqla_engine(
+                catalog=catalog,
+                schema=schema,
+                override_ssh_tunnel=ssh_tunnel,
+            ) as engine:
+                # Execute prequeries on a connection to ensure catalog/schema context
+                # is set before inspector is used
+                with closing(engine.raw_connection()) as conn:
+                    prequeries = self.db_engine_spec.get_prequeries(
+                        database=self,
+                        catalog=catalog,
+                        schema=schema,
+                    )
+                    for prequery in prequeries:
+                        cursor = conn.cursor()
+                        cursor.execute(prequery)
+                
+                # Now create inspector - it should use connection with prequeries
+                # Note: This doesn't guarantee the same connection, but for MySQL
+                # with StarRocks, we rely on session-level SET catalog/USE statements
+                yield sqla.inspect(engine)
+        else:
+            # Default behavior for other engines
+            with self.get_sqla_engine(
+                catalog=catalog,
+                schema=schema,
+                override_ssh_tunnel=ssh_tunnel,
+            ) as engine:
+                yield sqla.inspect(engine)
 
     @cache_util.memoized_func(
         key="db:{self.id}:schema_list",
@@ -837,6 +988,64 @@ class Database(
         :param ssh_tunnel: SSH tunnel information needed to establish a connection
         :return: schema list
         """
+        # For MySQL engine spec with StarRocks, use raw connection to ensure
+        # prequeries (SET catalog) are executed before listing schemas
+        logger = logging.getLogger(__name__)
+        # logger.info(
+        #     "[Database get_all_schema_names] engine=%s, catalog=%s",
+        #     self.db_engine_spec.engine,
+        #     catalog,
+        # )
+        
+        if self.db_engine_spec.engine == "mysql" and catalog:
+            try:
+                # logger.info(
+                #     "[Database get_all_schema_names] Using raw connection for MySQL with catalog"
+                # )
+                # get_raw_connection doesn't accept ssh_tunnel parameter
+                # Use get_sqla_engine with override_ssh_tunnel instead, then get raw connection
+                with self.get_sqla_engine(
+                    catalog=catalog,
+                    override_ssh_tunnel=ssh_tunnel,
+                ) as engine:
+                    with closing(engine.raw_connection()) as conn:
+                        # Execute prequeries to set catalog
+                        prequeries = self.db_engine_spec.get_prequeries(
+                            database=self,
+                            catalog=catalog,
+                            schema=None,
+                        )
+                        for prequery in prequeries:
+                            cursor = conn.cursor()
+                            # logger.info(
+                            #     "[Database get_all_schema_names] Executing prequery: %s",
+                            #     prequery,
+                            # )
+                            cursor.execute(prequery)
+                        
+                        cursor = conn.cursor()
+                        query = "SHOW DATABASES"
+                        # logger.info(
+                        #     "[Database get_all_schema_names] Executing query: %s", query
+                        # )
+                        cursor.execute(query)
+                        result = cursor.fetchall()
+                        schemas = {row[0] for row in result}
+                        # logger.info(
+                        #     "[Database get_all_schema_names] Found %d schemas: %s",
+                        #     len(schemas),
+                        #     list(schemas)[:10],  # Log first 10 schemas
+                        # )
+                        return schemas
+            except Exception as ex:
+                # logger.error(
+                #     "[Database get_all_schema_names] Error: %s",
+                #     ex,
+                #     exc_info=True,
+                # )
+                raise self.db_engine_spec.get_dbapi_mapped_exception(ex) from ex
+        
+        # Default behavior for other engines
         try:
             with self.get_inspector(
                 catalog=catalog,
@@ -927,6 +1136,64 @@ class Database(
             )
 
     def get_table_comment(self, table: Table) -> str | None:
+        logger = logging.getLogger(__name__)
+        
+        # For MySQL engine spec with StarRocks, use raw connection to ensure
+        # prequeries are executed before getting table comment
+        if self.db_engine_spec.engine == "mysql" and table.catalog:
+            try:
+                # Use get_raw_connection which already executes prequeries
+                with self.get_raw_connection(
+                    catalog=table.catalog,
+                    schema=table.schema,
+                ) as conn:
+                    cursor = conn.cursor()
+                    table_name = table.table
+                    
+                    # Build fully qualified table name: catalog.schema.table
+                    if table.catalog and table.schema:
+                        catalog_clean = table.catalog.strip().replace("`", "")
+                        schema_clean = table.schema.strip().replace("`", "")
+                        table_clean = table_name.strip().replace("`", "")
+                        fully_qualified = f"`{catalog_clean}`.`{schema_clean}`.`{table_clean}`"
+                        query = f"SHOW CREATE TABLE {fully_qualified}"
+                    else:
+                        query = f"SHOW CREATE TABLE `{table_name}`"
+                    
+                    logger.info(
+                        "[Database get_table_comment] Executing query: %s", query
+                    )
+                    cursor.execute(query)
+                    result = cursor.fetchone()
+                    
+                    if result:
+                        create_table_sql = result[1]  # Second column is CREATE TABLE statement
+                        # Parse COMMENT from CREATE TABLE statement
+                        # Look for COMMENT='comment text' at the end of CREATE TABLE
+                        import re
+                        comment_match = re.search(
+                            r"COMMENT\s*=\s*['\"]([^'\"]*)['\"]",
+                            create_table_sql,
+                            re.IGNORECASE,
+                        )
+                        if comment_match:
+                            comment = comment_match.group(1)
+                            logger.info(
+                                "[Database get_table_comment] Found comment: %s", comment
+                            )
+                            return comment
+                    
+                    # No comment found
+                    return None
+            except Exception as ex:
+                logger.error(
+                    "[Database get_table_comment] Error: %s",
+                    ex,
+                    exc_info=True,
+                )
+                raise self.db_engine_spec.get_dbapi_mapped_exception(ex) from ex
+        
+        # Default behavior for other engines
         with self.get_inspector(
             catalog=table.catalog,
             schema=table.schema,
@@ -934,6 +1201,101 @@ class Database(
             return self.db_engine_spec.get_table_comment(inspector, table)
 
     def get_columns(self, table: Table) -> list[ResultSetColumnType]:
+        logger = logging.getLogger(__name__)
+        # logger.info(
+        #     "[Database get_columns] engine=%s, catalog=%s, schema=%s, table=%s",
+        #     self.db_engine_spec.engine,
+        #     table.catalog,
+        #     table.schema,
+        #     table.table,
+        # )
+        
+        # For MySQL engine spec with StarRocks, use raw connection to ensure
+        # prequeries (SET catalog, USE schema) are executed before getting columns
+        if self.db_engine_spec.engine == "mysql" and table.catalog:
+            try:
+                # logger.info(
+                #     "[Database get_columns] Using raw connection for MySQL with catalog"
+                # )
+                # Use get_raw_connection which already executes prequeries
+                # This ensures catalog and schema context is set correctly
+                with self.get_raw_connection(
+                    catalog=table.catalog,
+                    schema=table.schema,
+                ) as conn:
+                    # Create inspector from the connection that has prequeries executed
+                    # We need to create a temporary engine from this connection
+                    # to get an inspector that uses the same connection
+                    from sqlalchemy import create_engine
+                    from sqlalchemy.engine import Connection
+                    
+                    # Get the engine that was used to create this connection
+                    # We'll use the connection's bind (engine) to create inspector
+                    # But we need to ensure inspector uses this specific connection
+                    # For now, let's use the connection directly via SQL
+                    # SHOW COLUMNS FROM fully qualified table name (catalog.schema.table)
+                    cursor = conn.cursor()
+                    table_name = table.table
+                    
+                    # Build fully qualified table name: catalog.schema.table
+                    # This helps with permissions when using impersonation
+                    if table.catalog and table.schema:
+                        catalog_clean = table.catalog.strip().replace("`", "")
+                        schema_clean = table.schema.strip().replace("`", "")
+                        table_clean = table_name.strip().replace("`", "")
+                        fully_qualified = f"`{catalog_clean}`.`{schema_clean}`.`{table_clean}`"
+                        query = f"SHOW COLUMNS FROM {fully_qualified}"
+                    else:
+                        query = f"SHOW COLUMNS FROM `{table_name}`"
+                    
+                    # logger.info(
+                    #     "[Database get_columns] Executing query: %s", query
+                    # )
+                    cursor.execute(query)
+                    result = cursor.fetchall()
+                    
+                    # Parse SHOW COLUMNS output and convert to ResultSetColumnType
+                    # Format: (Field, Type, Null, Key, Default, Extra)
+                    columns: list[ResultSetColumnType] = []
+                    for row in result:
+                        field_name = row[0]
+                        field_type = row[1]  # e.g., "varchar(255)", "int", "datetime"
+                        is_nullable = row[2] == "YES"
+                        default_value = row[4]
+                        
+                        # Get column spec from engine spec to determine type and is_dttm
+                        col_spec = self.db_engine_spec.get_column_spec(
+                            native_type=field_type,
+                            db_extra=self.get_extra(),
+                        )
+                        
+                        # Convert to ResultSetColumnType
+                        result_col: ResultSetColumnType = {
+                            "column_name": field_name,
+                            "name": field_name,
+                            "type": str(col_spec.sqla_type) if col_spec and col_spec.sqla_type else field_type,
+                            "is_dttm": col_spec.is_dttm if col_spec else False,
+                            "type_generic": col_spec.generic_type if col_spec else None,
+                            "nullable": is_nullable,
+                            "default": default_value,
+                        }
+                        columns.append(result_col)
+                    
+                    # logger.info(
+                    #     "[Database get_columns] Found %d columns: %s",
+                    #     len(columns),
+                    #     [col["column_name"] for col in columns],
+                    # )
+                    return columns
+            except Exception as ex:
+                # logger.error(
+                #     "[Database get_columns] Error: %s",
+                #     ex,
+                #     exc_info=True,
+                # )
+                raise self.db_engine_spec.get_dbapi_mapped_exception(ex) from ex
+        
+        # Default behavior for other engines
         with self.get_inspector(
             catalog=table.catalog,
             schema=table.schema,
@@ -953,6 +1315,75 @@ class Database(
             return self.db_engine_spec.get_metrics(self, inspector, table)
 
     def get_indexes(self, table: Table) -> list[dict[str, Any]]:
+        logger = logging.getLogger(__name__)
+        
+        # For MySQL engine spec with StarRocks, use raw connection to ensure
+        # prequeries are executed before getting indexes
+        if self.db_engine_spec.engine == "mysql" and table.catalog:
+            try:
+                # Use get_raw_connection which already executes prequeries
+                with self.get_raw_connection(
+                    catalog=table.catalog,
+                    schema=table.schema,
+                ) as conn:
+                    cursor = conn.cursor()
+                    table_name = table.table
+                    
+                    # Build fully qualified table name: catalog.schema.table
+                    if table.catalog and table.schema:
+                        catalog_clean = table.catalog.strip().replace("`", "")
+                        schema_clean = table.schema.strip().replace("`", "")
+                        table_clean = table_name.strip().replace("`", "")
+                        fully_qualified = f"`{catalog_clean}`.`{schema_clean}`.`{table_clean}`"
+                        query = f"SHOW INDEXES FROM {fully_qualified}"
+                    else:
+                        query = f"SHOW INDEXES FROM `{table_name}`"
+                    
+                    # logger.info(
+                    #     "[Database get_indexes] Executing query: %s", query
+                    # )
+                    cursor.execute(query)
+                    result = cursor.fetchall()
+                    
+                    # Parse SHOW INDEXES output
+                    # Format: (Table, Non_unique, Key_name, Seq_in_index, Column_name, ...)
+                    indexes_dict: dict[str, dict[str, Any]] = {}
+                    for row in result:
+                        key_name = row[2]  # Key_name
+                        if key_name == "PRIMARY":
+                            continue  # Skip PRIMARY KEY, handled by get_pk_constraint
+                        
+                        seq_in_index = row[3]  # Seq_in_index
+                        column_name = row[4]  # Column_name
+                        non_unique = row[1]  # Non_unique (0 = unique, 1 = non-unique)
+                        
+                        if key_name not in indexes_dict:
+                            indexes_dict[key_name] = {
+                                "name": key_name,
+                                "column_names": [],
+                                "unique": non_unique == 0,
+                            }
+                        
+                        # Add column in order (Seq_in_index)
+                        indexes_dict[key_name]["column_names"].append(column_name)
+                    
+                    # Convert to list and sort by name
+                    indexes = list(indexes_dict.values())
+                    indexes.sort(key=lambda x: x["name"])
+                    
+                    # logger.info(
+                    #     "[Database get_indexes] Found %d indexes", len(indexes)
+                    # )
+                    return indexes
+            except Exception as ex:
+                # logger.error(
+                #     "[Database get_indexes] Error: %s",
+                #     ex,
+                #     exc_info=True,
+                # )
+                raise self.db_engine_spec.get_dbapi_mapped_exception(ex) from ex
+        
+        # Default behavior for other engines
         with self.get_inspector(
             catalog=table.catalog,
             schema=table.schema,
@@ -960,6 +1391,75 @@ class Database(
             return self.db_engine_spec.get_indexes(self, inspector, table)
 
     def get_pk_constraint(self, table: Table) -> dict[str, Any]:
+        logger = logging.getLogger(__name__)
+        
+        # For MySQL engine spec with StarRocks, use raw connection to ensure
+        # prequeries are executed before getting PK constraint
+        if self.db_engine_spec.engine == "mysql" and table.catalog:
+            try:
+                # Use get_raw_connection which already executes prequeries
+                with self.get_raw_connection(
+                    catalog=table.catalog,
+                    schema=table.schema,
+                ) as conn:
+                    cursor = conn.cursor()
+                    table_name = table.table
+                    
+                    # Build fully qualified table name: catalog.schema.table
+                    if table.catalog and table.schema:
+                        catalog_clean = table.catalog.strip().replace("`", "")
+                        schema_clean = table.schema.strip().replace("`", "")
+                        table_clean = table_name.strip().replace("`", "")
+                        fully_qualified = f"`{catalog_clean}`.`{schema_clean}`.`{table_clean}`"
+                        query = f"SHOW CREATE TABLE {fully_qualified}"
+                    else:
+                        query = f"SHOW CREATE TABLE `{table_name}`"
+                    
+                    # logger.info(
+                    #     "[Database get_pk_constraint] Executing query: %s", query
+                    # )
+                    cursor.execute(query)
+                    result = cursor.fetchone()
+                    if result:
+                        create_table_sql = result[1]  # Second column is CREATE TABLE statement
+                        # Parse PRIMARY KEY from CREATE TABLE statement
+                        # Look for PRIMARY KEY (`column1`, `column2`, ...)
+                        import re
+                        # Match PRIMARY KEY with single or multiple columns
+                        pk_match = re.search(
+                            r'PRIMARY KEY\s*\(([^)]+)\)',
+                            create_table_sql,
+                            re.IGNORECASE,
+                        )
+                        if pk_match:
+                            pk_columns_str = pk_match.group(1)
+                            # Extract column names (handle backticks and quotes)
+                            pk_columns = re.findall(r'`?(\w+)`?', pk_columns_str)
+                            if pk_columns:
+                                pk_constraint = {
+                                    "constrained_columns": pk_columns,
+                                    "name": "PRIMARY",
+                                }
+                                
+                                def _convert(value: Any) -> Any:
+                                    try:
+                                        return json.base_json_conv(value)
+                                    except TypeError:
+                                        return None
+                                
+                                return {key: _convert(value) for key, value in pk_constraint.items()}
+                    
+                    # No primary key found
+                    return {}
+            except Exception as ex:
+                # logger.error(
+                #     "[Database get_pk_constraint] Error: %s",
+                #     ex,
+                #     exc_info=True,
+                # )
+                raise self.db_engine_spec.get_dbapi_mapped_exception(ex) from ex
+        
+        # Default behavior for other engines
         with self.get_inspector(
             catalog=table.catalog,
             schema=table.schema,
@@ -975,6 +1475,79 @@ class Database(
             return {key: _convert(value) for key, value in pk_constraint.items()}
 
     def get_foreign_keys(self, table: Table) -> list[dict[str, Any]]:
+        logger = logging.getLogger(__name__)
+        
+        # For MySQL engine spec with StarRocks, use raw connection to ensure
+        # prequeries are executed before getting foreign keys
+        if self.db_engine_spec.engine == "mysql" and table.catalog:
+            try:
+                # Use get_raw_connection which already executes prequeries
+                with self.get_raw_connection(
+                    catalog=table.catalog,
+                    schema=table.schema,
+                ) as conn:
+                    cursor = conn.cursor()
+                    table_name = table.table
+                    
+                    # Build fully qualified table name: catalog.schema.table
+                    if table.catalog and table.schema:
+                        catalog_clean = table.catalog.strip().replace("`", "")
+                        schema_clean = table.schema.strip().replace("`", "")
+                        table_clean = table_name.strip().replace("`", "")
+                        fully_qualified = f"`{catalog_clean}`.`{schema_clean}`.`{table_clean}`"
+                        query = f"SHOW CREATE TABLE {fully_qualified}"
+                    else:
+                        query = f"SHOW CREATE TABLE `{table_name}`"
+                    
+                    # logger.info(
+                    #     "[Database get_foreign_keys] Executing query: %s", query
+                    # )
+                    cursor.execute(query)
+                    result = cursor.fetchone()
+                    
+                    if result:
+                        create_table_sql = result[1]  # Second column is CREATE TABLE statement
+                        # Parse FOREIGN KEY from CREATE TABLE statement
+                        import re
+                        # Match FOREIGN KEY constraints
+                        fk_pattern = r'CONSTRAINT\s+`?(\w+)`?\s+FOREIGN KEY\s*\(([^)]+)\)\s+REFERENCES\s+`?(\w+)`?\s*\(([^)]+)\)'
+                        fk_matches = re.finditer(fk_pattern, create_table_sql, re.IGNORECASE)
+                        
+                        foreign_keys = []
+                        for match in fk_matches:
+                            constraint_name = match.group(1)
+                            local_columns_str = match.group(2)
+                            referred_table = match.group(3)
+                            referred_columns_str = match.group(4)
+                            
+                            # Extract column names
+                            local_columns = [col.strip().strip('`') for col in local_columns_str.split(',')]
+                            referred_columns = [col.strip().strip('`') for col in referred_columns_str.split(',')]
+                            
+                            foreign_key = {
+                                "name": constraint_name,
+                                "constrained_columns": local_columns,
+                                "referred_table": referred_table,
+                                "referred_columns": referred_columns,
+                            }
+                            foreign_keys.append(foreign_key)
+                        
+                        # logger.info(
+                        #     "[Database get_foreign_keys] Found %d foreign keys", len(foreign_keys)
+                        # )
+                        return foreign_keys
+                    
+                    # No foreign keys found
+                    return []
+            except Exception as ex:
+                # logger.error(
+                #     "[Database get_foreign_keys] Error: %s",
+                #     ex,
+                #     exc_info=True,
+                # )
+                raise self.db_engine_spec.get_dbapi_mapped_exception(ex) from ex
+        
+        # Default behavior for other engines
         with self.get_inspector(
             catalog=table.catalog,
             schema=table.schema,
