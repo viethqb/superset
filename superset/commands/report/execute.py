@@ -92,9 +92,12 @@ class BaseReportState:
         report_schedule: ReportSchedule,
         scheduled_dttm: datetime,
         execution_id: UUID,
+        date_offset: Optional[dict[str, Any]] = None,
     ) -> None:
         self._report_schedule = report_schedule
         self._scheduled_dttm = scheduled_dttm
+        # one-off override of the report's own date offset (e.g. "send now")
+        self._date_offset = date_offset
         self._start_dttm = datetime.utcnow()
         self._execution_id = execution_id
 
@@ -548,6 +551,8 @@ class BaseReportState:
             csv=csv_data,
             embedded_data=embedded_data,
             header_data=header_data,
+            date_offset=self._date_offset
+            or (self._report_schedule.extra or {}).get("date_offset"),
         )
 
     def _send(
@@ -833,10 +838,12 @@ class ReportScheduleStateMachine:  # pylint: disable=too-few-public-methods
         task_uuid: UUID,
         report_schedule: ReportSchedule,
         scheduled_dttm: datetime,
+        date_offset: Optional[dict[str, Any]] = None,
     ):
         self._execution_id = task_uuid
         self._report_schedule = report_schedule
         self._scheduled_dttm = scheduled_dttm
+        self._date_offset = date_offset
 
     @transaction()
     def run(self) -> None:
@@ -848,6 +855,7 @@ class ReportScheduleStateMachine:  # pylint: disable=too-few-public-methods
                     self._report_schedule,
                     self._scheduled_dttm,
                     self._execution_id,
+                    self._date_offset,
                 ).next()
                 break
         else:
@@ -861,10 +869,17 @@ class AsyncExecuteReportScheduleCommand(BaseCommand):
     - On Alerts uses related Command AlertCommand and sends configured notifications
     """
 
-    def __init__(self, task_id: str, model_id: int, scheduled_dttm: datetime):
+    def __init__(
+        self,
+        task_id: str,
+        model_id: int,
+        scheduled_dttm: datetime,
+        date_offset: Optional[dict[str, Any]] = None,
+    ):
         self._model_id = model_id
         self._model: Optional[ReportSchedule] = None
         self._scheduled_dttm = scheduled_dttm
+        self._date_offset = date_offset
         self._execution_id = UUID(task_id)
 
     @transaction()
@@ -885,7 +900,10 @@ class AsyncExecuteReportScheduleCommand(BaseCommand):
                     username,
                 )
                 ReportScheduleStateMachine(
-                    self._execution_id, self._model, self._scheduled_dttm
+                    self._execution_id,
+                    self._model,
+                    self._scheduled_dttm,
+                    self._date_offset,
                 ).run()
         except CommandException:
             raise

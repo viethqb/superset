@@ -94,8 +94,19 @@ export type DashboardState = {
   anchor?: string;
 };
 
+export enum DateOffsetMode {
+  BusinessDay = 'business_day',
+  Days = 'days',
+}
+
+export type DateOffset = {
+  mode: DateOffsetMode;
+  days?: number;
+};
+
 export type Extra = {
   dashboard?: DashboardState;
+  date_offset?: DateOffset;
 };
 
 export type Operator = '<' | '>' | '<=' | '>=' | '==' | '!=' | 'not null';

@@ -52,7 +52,8 @@ import { createErrorHandler, createFetchRelated } from 'src/views/CRUD/utils';
 import { isUserAdmin } from 'src/dashboard/util/permissionUtils';
 import Owner from 'src/types/Owner';
 import AlertReportModal from 'src/features/alerts/AlertReportModal';
-import { AlertObject, AlertState } from 'src/features/alerts/types';
+import SendNowModal from 'src/features/alerts/components/SendNowModal';
+import { AlertObject, AlertState, DateOffset } from 'src/features/alerts/types';
 import { ModifiedInfo } from 'src/components/AuditInfo';
 import { QueryObjectColumns } from 'src/views/CRUD/types';
 
@@ -157,6 +158,9 @@ function AlertList({
   const [currentAlertDeleting, setCurrentAlertDeleting] =
     useState<AlertObject | null>(null);
   const [sendingReportId, setSendingReportId] = useState<number | null>(null);
+  const [alertSendingNow, setAlertSendingNow] = useState<AlertObject | null>(
+    null,
+  );
 
   // Actions
   function handleAlertEdit(alert: AlertObject | null) {
@@ -241,13 +245,15 @@ function AlertList({
   );
 
   const handleSendNow = useCallback(
-    async (alert: AlertObject) => {
+    async (alert: AlertObject, dateOffset: DateOffset) => {
+      setAlertSendingNow(null);
       if (!alert?.id) return;
 
       setSendingReportId(alert.id);
       try {
         const response = await SupersetClient.post({
           endpoint: `/api/v1/report/${alert.id}/send_now`,
+          jsonPayload: { date_offset: dateOffset },
         });
 
         if (response.json) {
@@ -386,7 +392,7 @@ function AlertList({
           const handleDelete = () => setCurrentAlertDeleting(original);
           const handleGotoExecutionLog = () =>
             history.push(`/${original.type.toLowerCase()}/${original.id}/log`);
-          const handleSendNowClick = () => handleSendNow(original);
+          const handleSendNowClick = () => setAlertSendingNow(original);
 
           const allowEdit =
             original.owners.map((o: Owner) => o.id).includes(user.userId) ||
@@ -447,14 +453,7 @@ function AlertList({
         hidden: true,
       },
     ],
-    [
-      canDelete,
-      canEdit,
-      isReportEnabled,
-      toggleActive,
-      handleSendNow,
-      sendingReportId,
-    ],
+    [canDelete, canEdit, isReportEnabled, toggleActive, sendingReportId],
   );
 
   const subMenuButtons: SubMenuProps['buttons'] = [];
@@ -626,6 +625,14 @@ function AlertList({
           onHide={() => setCurrentAlertDeleting(null)}
           open
           title={t('Delete %s?', title)}
+        />
+      )}
+      {alertSendingNow && (
+        <SendNowModal
+          alert={alertSendingNow}
+          title={title}
+          onHide={() => setAlertSendingNow(null)}
+          onSend={handleSendNow}
         />
       )}
       <ConfirmStatusChange

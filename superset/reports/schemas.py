@@ -23,6 +23,7 @@ from marshmallow import fields, Schema, validate, validates, validates_schema
 from marshmallow.validate import Length, Range, ValidationError
 from pytz import all_timezones
 
+from superset.reports.date_offset import validate_date_offset
 from superset.reports.models import (
     ReportCreationMethod,
     ReportDataFormat,
@@ -243,6 +244,10 @@ class ReportSchedulePostSchema(Schema):
         default=None,
     )
 
+    @validates("extra")
+    def validate_extra(self, value: Optional[dict[str, Any]]) -> None:
+        validate_date_offset((value or {}).get("date_offset"))
+
     @validates("custom_width")
     def validate_custom_width(
         self,
@@ -380,6 +385,10 @@ class ReportSchedulePutSchema(Schema):
         required=False,
         default=None,
     )
+
+    @validates("extra")
+    def validate_extra(self, value: Optional[dict[str, Any]]) -> None:
+        validate_date_offset((value or {}).get("date_offset"))
 
     @validates("custom_width")
     def validate_custom_width(

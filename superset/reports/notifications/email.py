@@ -17,7 +17,7 @@
 import logging
 import textwrap
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from email.utils import make_msgid, parseaddr
 from typing import Any, Optional
 
@@ -27,6 +27,7 @@ from pytz import timezone
 
 from superset import app, is_feature_enabled
 from superset.exceptions import SupersetErrorsException
+from superset.reports.date_offset import resolve_report_date
 from superset.reports.models import ReportRecipientType
 from superset.reports.notifications.base import BaseNotification
 from superset.reports.notifications.exceptions import NotificationError
@@ -214,16 +215,10 @@ class EmailNotification(BaseNotification):  # pylint: disable=too-few-public-met
         This feature is hidden behind a feature flag `DATE_FORMAT_IN_EMAIL_SUBJECT`
         by default it is disabled
         """
+        if not name:
+            return name
         now = datetime.now(timezone("Asia/Ho_Chi_Minh"))
-        weekday = now.weekday()
-        if weekday == 0:  # Thứ 2
-            yesterday = now - timedelta(days=3)  # Thứ 6 tuần trước
-        elif weekday == 6:  # Chủ nhật
-            yesterday = now - timedelta(days=2)  # Thứ 6
-        else:
-            yesterday = now - timedelta(days=1)
-
-        return yesterday.strftime(name)
+        return resolve_report_date(now, self._content.date_offset).strftime(name)
 
     def _get_call_to_action(self) -> str:
         return __(app.config["EMAIL_REPORTS_CTA"])

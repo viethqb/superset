@@ -57,6 +57,7 @@ import {
   ChartObject,
   DashboardObject,
   DatabaseObject,
+  DateOffset,
   Extra,
   MetaObject,
   Operator,
@@ -71,6 +72,7 @@ import {
 import { useSelector } from 'react-redux';
 import { UserWithPermissionsAndRoles } from 'src/types/bootstrapTypes';
 import NumberInput from './components/NumberInput';
+import DateOffsetControl from './components/DateOffsetControl';
 import { AlertReportCronScheduler } from './components/AlertReportCronScheduler';
 import { NotificationMethod } from './components/NotificationMethod';
 import ValidatedPanelHeader from './components/ValidatedPanelHeader';
@@ -612,6 +614,7 @@ const AlertReportModal: FunctionComponent<AlertReportModalProps> = ({
     setCurrentAlert(currentAlertData => {
       const dashboardState = currentAlertData?.extra?.dashboard;
       const extra = {
+        ...currentAlertData?.extra,
         dashboard: {
           ...dashboardState,
           anchor: value,
@@ -628,6 +631,7 @@ const AlertReportModal: FunctionComponent<AlertReportModalProps> = ({
     setCurrentAlert(currentAlertData => {
       const dashboardState = currentAlertData?.extra?.dashboard;
       const extra = {
+        ...currentAlertData?.extra,
         dashboard: {
           ...dashboardState,
           activeTabs: value,
@@ -640,6 +644,13 @@ const AlertReportModal: FunctionComponent<AlertReportModalProps> = ({
         extra,
       };
     });
+  };
+
+  const onDateOffsetChange = (value: DateOffset) => {
+    setCurrentAlert(currentAlertData => ({
+      ...currentAlertData,
+      extra: { ...currentAlertData?.extra, date_offset: value },
+    }));
   };
 
   // Alert fetch logic
@@ -662,6 +673,8 @@ const AlertReportModal: FunctionComponent<AlertReportModalProps> = ({
   };
 
   const onSave = () => {
+    const dateOffset = currentAlert?.extra?.date_offset;
+
     // Notification Settings
     const recipients: Recipient[] = [];
 
@@ -701,7 +714,10 @@ const AlertReportModal: FunctionComponent<AlertReportModalProps> = ({
       ),
       recipients,
       report_format: reportFormat || DEFAULT_NOTIFICATION_FORMAT,
-      extra: contentType === ContentType.Dashboard ? currentAlert?.extra : {},
+      extra: {
+        ...(contentType === ContentType.Dashboard && currentAlert?.extra),
+        ...(dateOffset && { date_offset: dateOffset }),
+      },
     };
 
     if (data.recipients && !data.recipients.length) {
@@ -852,7 +868,7 @@ const AlertReportModal: FunctionComponent<AlertReportModalProps> = ({
           addDangerToast(t('There was an error retrieving dashboard tabs.'));
         });
     }
-  }, [dashboard, tabsEnabled, currentAlert?.extra, addDangerToast]);
+  }, [dashboard, tabsEnabled, currentAlert?.extra?.dashboard, addDangerToast]);
 
   const databaseLabel = currentAlert?.database && !currentAlert.database.label;
   useEffect(() => {
@@ -1819,6 +1835,13 @@ const AlertReportModal: FunctionComponent<AlertReportModalProps> = ({
               onTimezoneChange={onTimezoneChange}
               timezone={currentAlert?.timezone}
               minWidth="100%"
+            />
+          </StyledInputContainer>
+          <StyledInputContainer>
+            <div className="control-label">{t('Date in email')}</div>
+            <DateOffsetControl
+              value={currentAlert?.extra?.date_offset}
+              onChange={onDateOffsetChange}
             />
           </StyledInputContainer>
           <StyledInputContainer>

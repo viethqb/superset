@@ -19,5 +19,11 @@ from typing import TypedDict
 from superset.dashboards.permalink.types import DashboardPermalinkState
 
 
-class ReportScheduleExtra(TypedDict):
+class ReportDateOffset(TypedDict, total=False):
+    mode: str
+    days: int
+
+
+class ReportScheduleExtra(TypedDict, total=False):
     dashboard: DashboardPermalinkState
+    date_offset: ReportDateOffset

@@ -34,6 +34,8 @@ class NotificationContent:
     description: Optional[str] = ""
     url: Optional[str] = None  # url to chart/dashboard for this screenshot
     embedded_data: Optional[pd.DataFrame] = None
+    # which date the date formats in the name/description resolve to
+    date_offset: Optional[dict[str, Any]] = None
 
 
 class BaseNotification:  # pylint: disable=too-few-public-methods

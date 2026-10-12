@@ -79,7 +79,11 @@ def scheduler() -> None:
 
 
 @celery_app.task(name="reports.execute", bind=True)
-def execute(self: Task, report_schedule_id: int) -> None:
+def execute(
+    self: Task,
+    report_schedule_id: int,
+    date_offset: dict[str, Any] | None = None,
+) -> None:
     stats_logger: BaseStatsLogger = app.config["STATS_LOGGER"]
     stats_logger.incr("reports.execute")
 
@@ -96,6 +100,7 @@ def execute(self: Task, report_schedule_id: int) -> None:
             task_id,
             report_schedule_id,
             scheduled_dttm,
+            date_offset,
         ).run()
     except ReportScheduleUnexpectedError:
         logger.exception(

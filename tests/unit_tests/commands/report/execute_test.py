@@ -15,12 +15,18 @@
 # specific language governing permissions and limitations
 # under the License.
 
+from datetime import datetime
+from typing import Any, Optional
+from uuid import uuid4
+
+import pytest
 from pytest_mock import MockerFixture
 
 from superset.commands.report.execute import BaseReportState
 from superset.reports.models import (
     ReportRecipientType,
     ReportSchedule,
+    ReportScheduleType,
     ReportSourceFormat,
 )
 from superset.utils.core import HeaderDataType
@@ -220,3 +226,41 @@ def test_log_data_with_missing_values(mocker: MockerFixture) -> None:
     }
 
     assert result == expected_result
+
+
+@pytest.mark.parametrize(
+    "saved,override,expected",
+    [
+        (None, None, None),
+        ({"mode": "days", "days": 2}, None, {"mode": "days", "days": 2}),
+        (
+            {"mode": "days", "days": 2},
+            {"mode": "business_day"},
+            {"mode": "business_day"},
+        ),
+        (None, {"mode": "days", "days": 0}, {"mode": "days", "days": 0}),
+    ],
+)
+def test_notification_content_date_offset(
+    mocker: MockerFixture,
+    saved: Optional[dict[str, Any]],
+    override: Optional[dict[str, Any]],
+    expected: Optional[dict[str, Any]],
+) -> None:
+    mock_report_schedule: ReportSchedule = mocker.Mock(spec=ReportSchedule)
+    mock_report_schedule.type = ReportScheduleType.REPORT
+    mock_report_schedule.report_format = "PNG"
+    mock_report_schedule.name = "A report"
+    mock_report_schedule.email_subject = "Report %d/%m/%Y"
+    mock_report_schedule.description = "Data of %d/%m/%Y"
+    mock_report_schedule.extra = {"date_offset": saved} if saved else {}
+    mocker.patch.object(BaseReportState, "_get_log_data", return_value={})
+    mocker.patch.object(BaseReportState, "_get_url", return_value="http://url")
+    mocker.patch.object(BaseReportState, "_get_screenshots", return_value=[b"image"])
+
+    state = BaseReportState(
+        mock_report_schedule, datetime.now(), uuid4(), date_offset=override
+    )
+    content = state._get_notification_content()
+
+    assert content.date_offset == expected

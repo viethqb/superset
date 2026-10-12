@@ -45,6 +45,7 @@ from superset.dashboards.filters import DashboardAccessFilter
 from superset.databases.filters import DatabaseFilter
 from superset.exceptions import SupersetException
 from superset.extensions import event_logger
+from superset.reports.date_offset import validate_date_offset
 from superset.reports.filters import ReportScheduleAllTextFilter, ReportScheduleFilter
 from superset.reports.models import ReportSchedule
 from superset.reports.schemas import (
@@ -278,6 +279,24 @@ class ReportScheduleRestApi(BaseSupersetModelRestApi):
               type: integer
             name: pk
             description: The report schedule pk
+          requestBody:
+            description: >-
+              Optional date offset used for this run only, overriding the one
+              saved on the report schedule
+            required: false
+            content:
+              application/json:
+                schema:
+                  type: object
+                  properties:
+                    date_offset:
+                      type: object
+                      properties:
+                        mode:
+                          type: string
+                          enum: [business_day, days]
+                        days:
+                          type: integer
           responses:
             200:
               description: Report execution triggered
@@ -317,6 +336,13 @@ class ReportScheduleRestApi(BaseSupersetModelRestApi):
                     message="Cannot send inactive report schedule"
                 )
 
+            # Optional one-off date offset, the saved report is left untouched
+            date_offset = (request.get_json(silent=True) or {}).get("date_offset")
+            try:
+                validate_date_offset(date_offset)
+            except ValidationError as error:
+                return self.response_400(message=error.messages)
+
             # Generate task ID and trigger immediate execution
             task_id = str(uuid4())
             scheduled_dttm = datetime.utcnow()
@@ -324,6 +350,7 @@ class ReportScheduleRestApi(BaseSupersetModelRestApi):
             # Trigger the execute task immediately with current time as eta
             execute.apply_async(
                 (pk,),
+                {"date_offset": date_offset},
                 task_id=task_id,
                 eta=scheduled_dttm,
             )

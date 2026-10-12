@@ -73,3 +73,28 @@ def test_report_post_schema_custom_width_validation(mocker: MockerFixture) -> No
     assert excinfo.value.messages == {
         "custom_width": ["Screenshot width must be between 100px and 200px"]
     }
+
+
+def test_report_post_schema_date_offset_validation() -> None:
+    """
+    Test the validation of the date offset stored in `extra`.
+    """
+    schema = ReportSchedulePostSchema()
+    payload = {
+        "type": "Report",
+        "name": "A report",
+        "description": "My report",
+        "active": True,
+        "crontab": "* * * * *",
+        "timezone": "America/Los_Angeles",
+    }
+
+    schema.load({**payload, "extra": {}})
+    schema.load({**payload, "extra": {"date_offset": {"mode": "business_day"}}})
+    schema.load({**payload, "extra": {"date_offset": {"mode": "days", "days": 3}}})
+
+    with pytest.raises(ValidationError) as excinfo:
+        schema.load({**payload, "extra": {"date_offset": {"mode": "days"}}})
+    assert excinfo.value.messages == {
+        "extra": ["date_offset days must be an integer between 0 and 365"]
+    }

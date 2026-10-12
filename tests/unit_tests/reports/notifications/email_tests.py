@@ -14,7 +14,11 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+from typing import Any, Optional
+
 import pandas as pd
+import pytest
+from freezegun import freeze_time
 
 
 def test_render_description_with_html() -> None:
@@ -56,3 +60,43 @@ def test_render_description_with_html() -> None:
         in email_body
     )
     assert '<td>&lt;a href="http://www.example.com"&gt;333&lt;/a&gt;</td>' in email_body
+
+
+@pytest.mark.parametrize(
+    "date_offset,expected",
+    [
+        (None, "09/10/2026"),  # sent on a Monday -> Friday
+        ({"mode": "business_day"}, "09/10/2026"),
+        ({"mode": "days", "days": 1}, "11/10/2026"),
+        ({"mode": "days", "days": 0}, "12/10/2026"),
+    ],
+)
+@freeze_time("2026-10-12 03:00:00")  # Monday 10:00 in Asia/Ho_Chi_Minh
+def test_date_offset_in_description(
+    date_offset: Optional[dict[str, Any]], expected: str
+) -> None:
+    from superset.reports.models import ReportRecipients, ReportRecipientType
+    from superset.reports.notifications.base import NotificationContent
+    from superset.reports.notifications.email import EmailNotification
+
+    content = NotificationContent(
+        name="report %d/%m/%Y",
+        description="<p>Data of %d/%m/%Y</p>",
+        header_data={
+            "notification_format": "PNG",
+            "notification_type": "Report",
+            "owners": [1],
+            "notification_source": None,
+            "chart_id": None,
+            "dashboard_id": None,
+            "slack_channels": None,
+        },
+        date_offset=date_offset,
+    )
+
+    notification = EmailNotification(
+        recipient=ReportRecipients(type=ReportRecipientType.EMAIL), content=content
+    )
+
+    assert f"<p>Data of {expected}</p>" in notification._get_content().body
+    assert notification._parse_name(content.name) == f"report {expected}"
