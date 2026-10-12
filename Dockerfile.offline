@@ -1,0 +1,61 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to You under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License.  You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+######################################################################
+# Offline image build
+#
+# Layers this repo's Python code and an already built frontend on top of
+# an existing Superset image. Nothing is downloaded, so it builds without
+# internet access.
+#
+# Requirements:
+#   - BASE_IMAGE is available locally (e.g. `docker load -i superset.tar`)
+#     and already has the Python packages this code needs: no `pip install`
+#     happens here, so a change to requirements/ needs a new base image
+#   - the frontend is already built into superset/static/assets
+#     (`npm run build` in superset-frontend, on a machine with internet)
+#   - BuildKit, which picks up Dockerfile.offline.dockerignore
+#
+# Usage:
+#   docker build --network=none -f Dockerfile.offline -t superset:offline .
+######################################################################
+ARG BASE_IMAGE=viet1846/superset:4.1.5-beta2
+FROM ${BASE_IMAGE}
+
+USER root
+
+# Drop the base image's code and assets first, so that files deleted from
+# the repo (old migrations, stale asset chunks) do not linger in the image
+RUN find /app/superset -name "*.py" -delete \
+  && rm -rf /app/superset/static/assets
+
+# Backend: the superset Python package (API, commands, migrations, ...)
+# together with the built frontend in superset/static/assets
+COPY --chown=superset:superset superset /app/superset
+
+# Project metadata and startup scripts, same as the main Dockerfile
+COPY --chown=superset:superset pyproject.toml setup.py MANIFEST.in README.md /app/
+COPY --chown=superset:superset superset-frontend/package.json /app/superset-frontend/
+COPY --chown=superset:superset requirements/base.txt /app/requirements/
+COPY --chmod=755 docker/*.sh /app/docker/
+COPY --chmod=755 docker/run-server.sh /usr/bin/
+
+# Fail the build instead of shipping an image without a frontend
+RUN test -f /app/superset/static/assets/manifest.json \
+  || (echo "superset/static/assets is missing, build the frontend first" && exit 1)
+
+USER superset
