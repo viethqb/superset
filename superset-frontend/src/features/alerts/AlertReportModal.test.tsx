@@ -432,7 +432,7 @@ test('renders tab selection when Dashboard is selected', async () => {
   expect(
     screen.getByRole('combobox', { name: /dashboard/i }),
   ).toBeInTheDocument();
-  expect(screen.getByText(/select tab/i)).toBeInTheDocument();
+  expect(screen.getByText('Select tabs (multiple)')).toBeInTheDocument();
 });
 
 test('changes to content options when chart is selected', async () => {
