@@ -54,8 +54,13 @@ COPY --chown=superset:superset requirements/base.txt /app/requirements/
 COPY --chmod=755 docker/*.sh /app/docker/
 COPY --chmod=755 docker/run-server.sh /usr/bin/
 
-# Fail the build instead of shipping an image without a frontend
+# Fail the build instead of shipping an image with a missing or incomplete
+# frontend: every file the manifest points to must have been copied
 RUN test -f /app/superset/static/assets/manifest.json \
-  || (echo "superset/static/assets is missing, build the frontend first" && exit 1)
+  || { echo "superset/static/assets is missing, build the frontend first"; exit 1; }
+RUN for file in $(grep -o '/static/assets/[^"]*' /app/superset/static/assets/manifest.json | sort -u); do \
+    test -f "/app/superset${file}" \
+      || { echo "listed in manifest.json but missing: superset${file}"; missing=1; }; \
+  done; test -z "${missing}"
 
 USER superset

@@ -74,6 +74,9 @@ superset-frontend/migration-storybook.log
 yarn-error.log
 *.map
 *.min.js
+# The built frontend is tracked for Dockerfile.offline, without source maps
+!superset/static/assets/**/*.entry.js
+!superset/static/assets/**/*.min.js
 test-changelog.md
 *.tsbuildinfo
 
